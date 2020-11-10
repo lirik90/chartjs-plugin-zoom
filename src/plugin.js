@@ -90,6 +90,38 @@ function directionEnabled(mode, dir, chart) {
 	return false;
 }
 
+function getScaleUnderPoint(chartInstance, x, y) {
+	var scales = chartInstance.scales;
+	var scaleIds = Object.keys(scales);
+	for (var i = 0; i < scaleIds.length; i++) {
+		var scale = scales[scaleIds[i]];
+		if (y >= scale.top && y <= scale.bottom && x >= scale.left && x <= scale.right) {
+			return scale;
+		}
+	}
+	return null;
+}
+
+function getEnabledScalesByPoint(chartInstance, options, x, y) {
+	if (options.enabled && options.overScaleMode) {
+		var scale = getScaleUnderPoint(chartInstance, x, y);
+		var mode = typeof options.overScaleMode === 'function' ? options.overScaleMode({chart: chartInstance}, scale) : options.overScaleMode;
+
+		if (scale && directionEnabled(mode, scale.isHorizontal() ? 'x' : 'y', chartInstance)) {
+			return [scale];
+		}
+
+		var enabledScales = [];
+		helpers.each(chartInstance.scales, function(scaleItem) {
+			if (!directionEnabled(mode, scaleItem.isHorizontal() ? 'x' : 'y', chartInstance)) {
+				enabledScales.push(scaleItem);
+			}
+		});
+		return enabledScales;
+	}
+	return null;
+}
+
 function rangeMaxLimiter(zoomPanOptions, newMax) {
 	if (zoomPanOptions.scaleAxes && zoomPanOptions.rangeMax &&
 			!helpers.isNullOrUndef(zoomPanOptions.rangeMax[zoomPanOptions.scaleAxes])) {
@@ -222,7 +254,13 @@ function doZoom(chart, percentZoomX, percentZoomY, focalPoint, whichAxes, animat
 			_whichAxes = 'xy';
 		}
 
+		var enabledScales = getEnabledScalesByPoint(chart, zoomOptions, focalPoint.x, focalPoint.y);
+
 		helpers.each(chart.scales, function(scale) {
+			if (enabledScales && enabledScales.indexOf(scale) === -1) {
+				return;
+			}
+
 			if (scale.isHorizontal() && directionEnabled(zoomMode, 'x', chart) && directionEnabled(_whichAxes, 'x', chart)) {
 				zoomOptions.scaleAxes = 'x';
 				zoomScale(scale, percentZoomX, focalPoint, zoomOptions);
@@ -325,13 +363,17 @@ function panScale(scale, delta, panOptions) {
 	}
 }
 
-function doPan(chartInstance, deltaX, deltaY) {
+function doPan(chartInstance, deltaX, deltaY, panningScales) {
 	storeOriginalOptions(chartInstance);
 	var panOptions = chartInstance.$zoom._options.pan;
 	if (panOptions.enabled) {
 		var panMode = typeof panOptions.mode === 'function' ? panOptions.mode({chart: chartInstance}) : panOptions.mode;
 
 		helpers.each(chartInstance.scales, function(scale) {
+			if (panningScales && panningScales.indexOf(scale) === -1) {
+				return;
+			}
+
 			if (scale.isHorizontal() && directionEnabled(panMode, 'x', chartInstance) && deltaX !== 0) {
 				panOptions.scaleAxes = 'x';
 				panScale(scale, deltaX, panOptions);
@@ -604,6 +646,7 @@ var zoomPlugin = {
 			var currentDeltaX = null;
 			var currentDeltaY = null;
 			var panning = false;
+			var panningScales = null;
 			var handlePan = function(e) {
 				if (currentDeltaX !== null && currentDeltaY !== null) {
 					panning = true;
@@ -611,17 +654,26 @@ var zoomPlugin = {
 					var deltaY = e.deltaY - currentDeltaY;
 					currentDeltaX = e.deltaX;
 					currentDeltaY = e.deltaY;
-					doPan(chartInstance, deltaX, deltaY);
+					doPan(chartInstance, deltaX, deltaY, panningScales);
 				}
 			};
 
 			mc.on('panstart', function(e) {
+				var panOptions = chartInstance.$zoom._options.pan;
+				if (panOptions.enabled) {
+					var rect = e.target.getBoundingClientRect();
+					var x = e.center.x - rect.left;
+					var y = e.center.y - rect.top;
+					panningScales = getEnabledScalesByPoint(chartInstance, panOptions, x, y);
+				}
+
 				currentDeltaX = 0;
 				currentDeltaY = 0;
 				handlePan(e);
 			});
 			mc.on('panmove', handlePan);
 			mc.on('panend', function() {
+				panningScales = null;
 				currentDeltaX = null;
 				currentDeltaY = null;
 				zoomNS.panCumulativeDelta = 0;
